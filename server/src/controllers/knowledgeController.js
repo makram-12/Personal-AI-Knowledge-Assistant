@@ -1,127 +1,73 @@
-import Knowledge from "../models/knowledge.js";
-import { model, embeddingModel } from "../config/gemini.js";
-import { cosineSimilarity } from "../utils/embedding.js";
+import { model } from "../config/gemini.js";
+import {
+    buildRagContext,
+    ingestKnowledgeDocument,
+    listKnowledgeDocuments,
+    searchKnowledgeChunks,
+} from "../services/knowledgeService.js";
+import { answerWithRag } from "../services/ragService.js";
 
-/**
- * 🔹 Generate embedding
- */
-const generateEmbedding = async (text) => {
-    const result = await embeddingModel.embedContent({
-        content: {
-            parts: [{ text }],
-        },
-    });
-
-    return result.embedding.values;
-};
-
-/**
- * ✅ Create Knowledge + embedding
- */
 export const createKnowledge = async (req, res) => {
     try {
-        const { title, content, tags } = req.body;
-
-        const embedding = await generateEmbedding(content);
-
-        const item = await Knowledge.create({
-            title,
-            content,
-            tags,
-            embedding,
+        const document = await ingestKnowledgeDocument({
+            userId: req.user.id,
+            title: req.body.title,
+            content: req.body.content,
+            tags: req.body.tags,
+            sourceType: req.body.sourceType,
+            metadata: req.body.metadata,
         });
 
-        res.status(201).json(item);
+        res.status(201).json(document);
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(error.statusCode || 500).json({ message: error.message });
     }
 };
 
-/**
- * ✅ Get all
- */
 export const getKnowledge = async (req, res) => {
-    const items = await Knowledge.find().sort({ createdAt: -1 });
-    res.json(items);
+    try {
+        const result = await listKnowledgeDocuments({
+            userId: req.user.id,
+            page: req.query.page,
+            limit: req.query.limit,
+        });
+
+        res.json(result);
+    } catch (error) {
+        res.status(error.statusCode || 500).json({ message: error.message });
+    }
 };
 
-/**
- * 🔥 Smart Search (semantic)
- */
 export const searchKnowledge = async (req, res) => {
     try {
-        const { query } = req.body;
+        const chunks = await searchKnowledgeChunks({
+            userId: req.user.id,
+            query: req.body.query,
+            topK: req.body.topK,
+        });
 
-        const queryEmbedding = await generateEmbedding(query);
-
-        const all = await Knowledge.find();
-
-        const scored = all.map((item) => ({
-            ...item.toObject(),
-            score: cosineSimilarity(queryEmbedding, item.embedding),
-        }));
-
-        const sorted = scored
-            .sort((a, b) => b.score - a.score)
-            .slice(0, 5); // top 5
-
-        res.json(sorted);
+        res.json({
+            context: buildRagContext(chunks),
+            results: chunks,
+        });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
 };
 
-/**
- * 🤖 Ask (smart AI)
- */
 export const askKnowledge = async (req, res) => {
     try {
-        const { question } = req.body;
-
-        const queryEmbedding = await generateEmbedding(question);
-
-        const all = await Knowledge.find();
-
-        const top = all
-            .map((item) => ({
-                ...item.toObject(),
-                score: cosineSimilarity(queryEmbedding, item.embedding),
-            }))
-            .sort((a, b) => b.score - a.score)
-            .slice(0, 3);
-
-        const context = top
-            .map(
-                (item) =>
-                    `Title: ${item.title}\nContent: ${item.content}`
-            )
-            .join("\n\n");
-
-        const prompt = `
-You are an AI assistant.
-
-Answer ONLY from this knowledge:
-${context}
-
-Question:
-${question}
-`;
-
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-
-        res.json({
-            answer: response.text(),
-            sources: top,
+        const result = await answerWithRag({
+            userId: req.user.id,
+            question: req.body.question,
         });
+
+        res.json(result);
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(error.statusCode || 500).json({ message: error.message });
     }
 };
 
-/**
- * ✨ Summarize
- */
 export const summarizeKnowledge = async (req, res) => {
     try {
         const { content } = req.body;

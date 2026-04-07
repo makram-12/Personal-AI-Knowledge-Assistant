@@ -1,32 +1,70 @@
-import { useState } from "react";
-import Home from "./pages/Home";
-import Ask from "./pages/Ask";
-import Search from "./pages/Search";
-import Summarize from "./pages/Summarize";
-import "./index.css";
+import { useEffect, useState } from "react";
+import API from "./api/api";
+import AuthPanel from "./components/AuthPanel";
+import AssistantDashboard from "./components/AssistantDashboard";
+import "./App.css";
 
 export default function App() {
-  const [page, setPage] = useState("home");
+  const [token, setToken] = useState(localStorage.getItem("paika_token") || "");
+  const [user, setUser] = useState(null);
+  const [loadingUser, setLoadingUser] = useState(Boolean(token));
 
-  return (
-    <div className="container">
-      <nav className="nav">
-        <h2>AI Assistant</h2>
+  useEffect(() => {
+    if (!token) {
+      setUser(null);
+      setLoadingUser(false);
+      return;
+    }
 
-        <div className="nav-links">
-          <button onClick={() => setPage("home")}>Knowledge</button>
-          <button onClick={() => setPage("ask")}>Ask AI</button>
-          <button onClick={() => setPage("search")}>Search</button>
-          <button onClick={() => setPage("summarize")}>Summarize</button>
-        </div>
-      </nav>
+    let isMounted = true;
 
-      <div className="content">
-        {page === "home" && <Home />}
-        {page === "ask" && <Ask />}
-        {page === "search" && <Search />}
-        {page === "summarize" && <Summarize />}
-      </div>
-    </div>
-  );
+    const fetchMe = async () => {
+      try {
+        const response = await API.get("/auth/me");
+
+        if (isMounted) {
+          setUser(response.data.user);
+        }
+      } catch (error) {
+        localStorage.removeItem("paika_token");
+
+        if (isMounted) {
+          setToken("");
+          setUser(null);
+        }
+      } finally {
+        if (isMounted) {
+          setLoadingUser(false);
+        }
+      }
+    };
+
+    fetchMe();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [token]);
+
+  const handleAuthSuccess = ({ token: newToken, user: newUser }) => {
+    localStorage.setItem("paika_token", newToken);
+    setToken(newToken);
+    setUser(newUser);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("paika_token");
+    setToken("");
+    setUser(null);
+  };
+
+  if (loadingUser) {
+    return <div className="app-shell loading-shell">Loading workspace...</div>;
+  }
+
+  if (!token || !user) {
+    return <AuthPanel onAuthSuccess={handleAuthSuccess} />;
+  }
+
+  return <AssistantDashboard user={user} onLogout={handleLogout} />;
 }
